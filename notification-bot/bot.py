@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
-
 import logging
 import json
 import os
-import asyncio
+import uuid
 import pytz
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -15,6 +14,9 @@ TOKEN = os.getenv("BOT_TOKEN", "8665791853:AAGyiGxp5Sbh8AWbqlEHJX17r1wivpUVJP0")
 MOSCOW_TZ = pytz.timezone("Europe/Moscow")
 REMINDERS_FILE = "reminders.json"
 
+START_IMAGE = "start.jpg"   # картинка в приветственном сообщении
+FOOD_IMAGE  = "food.jpg"    # картинка в напоминании о еде
+
 # ─── Логирование ──────────────────────────────────────────────────────────────
 logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(message)s",
@@ -23,6 +25,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ─── Хранилище напоминаний ────────────────────────────────────────────────────
+# Структура: { "chat_id": [ {"id": "...", "hour": H, "minute": M}, ... ] }
 def load_reminders() -> dict:
     try:
         with open(REMINDERS_FILE, "r", encoding="utf-8") as f:
@@ -41,24 +44,23 @@ app_ref: Application | None = None
 # ─── Отправка напоминания ─────────────────────────────────────────────────────
 async def send_food_reminder(chat_id: int):
     try:
-        with open("nyan.jpg", "rb") as photo:
-            await app_ref.bot.send_photo(
-                chat_id=chat_id,
-                photo=photo,
-                caption=(
-                    "Привет, Катюша! 🌸\n\n"
-                    "Не забудь хорошо покушать! :3 \n\n"
-                    "Твой организм скажет тебе спасибо~"
-                ),
-            )
+        text = (
+            "Привет, Катюша! 🌸\n\n"
+            "Не забудь хорошо покушать! :3 \n\n"
+            "Твой организм скажет тебе спасибо 💕"
+        )
+        if os.path.exists(FOOD_IMAGE):
+            with open(FOOD_IMAGE, "rb") as photo:
+                await app_ref.bot.send_photo(chat_id=chat_id, photo=photo, caption=text)
+        else:
+            await app_ref.bot.send_message(chat_id=chat_id, text=text)
+        logger.info(f"Напоминание отправлено → chat_id={chat_id}")
     except Exception as e:
-        logger.error(f"Ошибка: {e}")
+        logger.error(f"Ошибка отправки chat_id={chat_id}: {e}")
 
 # ─── Планировщик ─────────────────────────────────────────────────────────────
-def schedule_reminder(chat_id: int, hour: int, minute: int):
-    job_id = f"food_{chat_id}"
-    if scheduler.get_job(job_id):
-        scheduler.remove_job(job_id)
+def schedule_reminder(chat_id: int, hour: int, minute: int, reminder_id: str):
+    job_id = f"food_{chat_id}_{reminder_id}"
     scheduler.add_job(
         send_food_reminder,
         trigger="cron",
@@ -69,79 +71,86 @@ def schedule_reminder(chat_id: int, hour: int, minute: int):
         args=[chat_id],
         replace_existing=True,
     )
-    logger.info(f"Запланировано: chat_id={chat_id} → {hour:02d}:{minute:02d} МСК")
+    logger.info(f"Запланировано {hour:02d}:{minute:02d} → chat_id={chat_id}")
 
-def remove_scheduled(chat_id: int):
-    job_id = f"food_{chat_id}"
+def remove_scheduled(chat_id: int, reminder_id: str):
+    job_id = f"food_{chat_id}_{reminder_id}"
     if scheduler.get_job(job_id):
         scheduler.remove_job(job_id)
 
-# ─── Главное меню ─────────────────────────────────────────────────────────────
+# ─── Вспомогательные ─────────────────────────────────────────────────────────
+def get_user_reminders(chat_id: int) -> list:
+    return reminders.get(str(chat_id), [])
+
+def reminder_list_text(chat_id: int) -> str:
+    rems = get_user_reminders(chat_id)
+    if not rems:
+        return "У тебя пока нет напоминаний. "
+    lines = ["Твои напоминания:"]
+    for r in rems:
+        lines.append(f"  • {r['hour']:02d}:{r['minute']:02d}")
+    return "\n".join(lines)
+
 def main_menu_text(chat_id: int) -> str:
-    base = "Привет, Катюша! 🌸\n\nЯ каждый день буду напоминать тебе вкусно покушать! "
-    key = str(chat_id)
-    if key in reminders:
-        r = reminders[key]
-        base += f"\n\n Активное напоминание: *{r['hour']:02d}:{r['minute']:02d}* по МСК"
-    else:
-        base += "\n\nУ тебя пока нет напоминаний — создай первое! "
-    return base
+    return (
+        "Привет, Катюша! 🌸\n\n"
+        "Я каждый день буду напоминать тебе вкусно покушать! \n\n"
+        + reminder_list_text(chat_id)
+    )
 
 def main_menu_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("Создать напоминание", callback_data="create")],
-        [InlineKeyboardButton("Удалить напоминание",  callback_data="delete")],
+        [InlineKeyboardButton("Удалить напоминание",  callback_data="delete_list")],
     ])
+
+async def edit_text(query, text, kb):
+    """Редактировать сообщение — учитываем, есть ли фото."""
+    if query.message.photo:
+        await query.edit_message_caption(caption=text, reply_markup=kb, parse_mode="Markdown")
+    else:
+        await query.edit_message_text(text, reply_markup=kb, parse_mode="Markdown")
 
 # ─── /start ───────────────────────────────────────────────────────────────────
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
-    await update.message.reply_text(
-        main_menu_text(chat_id),
-        reply_markup=main_menu_kb(),
-        parse_mode="Markdown",
-    )
+    text = main_menu_text(chat_id)
+    kb   = main_menu_kb()
 
-# ─── Обработчик кнопок ────────────────────────────────────────────────────────
+    if os.path.exists(START_IMAGE):
+        with open(START_IMAGE, "rb") as photo:
+            await update.message.reply_photo(
+                photo=photo, caption=text, reply_markup=kb, parse_mode="Markdown"
+            )
+    else:
+        await update.message.reply_text(text, reply_markup=kb, parse_mode="Markdown")
+
+# ─── Кнопки ───────────────────────────────────────────────────────────────────
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     chat_id = query.message.chat_id
-    data = query.data
+    data    = query.data
 
-    # ── Назад / главное меню ──────────────────────────────────────────────────
+    # Назад
     if data == "back":
-        await query.edit_message_text(
-            main_menu_text(chat_id),
-            reply_markup=main_menu_kb(),
-            parse_mode="Markdown",
-        )
+        await edit_text(query, main_menu_text(chat_id), main_menu_kb())
 
-    # ── Создать: выбор часа ───────────────────────────────────────────────────
+    # Создать — выбор часа
     elif data == "create":
-        hours = list(range(7, 24))   # 07 – 23
-        rows = []
-        row = []
-        for h in hours:
+        rows, row = [], []
+        for h in range(6, 24):
             row.append(InlineKeyboardButton(f"{h:02d}:__", callback_data=f"hour_{h}"))
             if len(row) == 4:
-                rows.append(row)
-                row = []
-        if row:
-            rows.append(row)
+                rows.append(row); row = []
+        if row: rows.append(row)
         rows.append([InlineKeyboardButton("◀️ Назад", callback_data="back")])
+        await edit_text(query, "Выбери *час* для напоминания:", InlineKeyboardMarkup(rows))
 
-        await query.edit_message_text(
-            "Выбери *час* для ежедневного напоминания (по МСК):",
-            reply_markup=InlineKeyboardMarkup(rows),
-            parse_mode="Markdown",
-        )
-
-    # ── Выбор минут ───────────────────────────────────────────────────────────
+    # Выбор минут
     elif data.startswith("hour_"):
         hour = int(data.split("_")[1])
         context.user_data["selected_hour"] = hour
-
         kb = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton(f"{hour:02d}:00", callback_data="min_0"),
@@ -151,74 +160,95 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ],
             [InlineKeyboardButton("◀️ Назад", callback_data="create")],
         ])
-        await query.edit_message_text(
-            f"Выбран час: *{hour:02d}*\nТеперь выбери *минуты*:",
-            reply_markup=kb,
-            parse_mode="Markdown",
-        )
+        await edit_text(query, f"Выбран час: *{hour:02d}*\nТеперь выбери *минуты*:", kb)
 
-    # ── Сохранить напоминание ─────────────────────────────────────────────────
+    # Сохранить
     elif data.startswith("min_"):
         minute = int(data.split("_")[1])
-        hour = context.user_data.get("selected_hour", 12)
+        hour   = context.user_data.get("selected_hour", 12)
+        rid    = str(uuid.uuid4())[:8]
 
-        reminders[str(chat_id)] = {"hour": hour, "minute": minute}
-        save_reminders(reminders)
-        schedule_reminder(chat_id, hour, minute)
-
-        await query.edit_message_text(
-            f"✅ Готово!\n\n"
-            f"Каждый день в *{hour:02d}:{minute:02d}* я буду напоминать тебе покушать! 💕",
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("◀️ В главное меню", callback_data="back")]
-            ]),
-            parse_mode="Markdown",
-        )
-
-    # ── Удалить напоминание ───────────────────────────────────────────────────
-    elif data == "delete":
         key = str(chat_id)
-        if key in reminders:
-            del reminders[key]
-            save_reminders(reminders)
-            remove_scheduled(chat_id)
-            text = "🗑 Напоминание удалено!"
-        else:
-            text = "У тебя нет активных напоминаний."
+        reminders.setdefault(key, []).append({"id": rid, "hour": hour, "minute": minute})
+        save_reminders(reminders)
+        schedule_reminder(chat_id, hour, minute, rid)
 
-        await query.edit_message_text(
-            text,
-            reply_markup=InlineKeyboardMarkup([
-                [InlineKeyboardButton("◀️ В главное меню", callback_data="back")]
-            ]),
+        text = (
+            f"✅ Готово!\n\n"
+            f"Каждый день в *{hour:02d}:{minute:02d}* я напомню тебе покушать! 💕\n\n"
+            + reminder_list_text(chat_id)
         )
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("➕ Добавить ещё", callback_data="create")],
+            [InlineKeyboardButton("◀️ В главное меню",  callback_data="back")],
+        ])
+        await edit_text(query, text, kb)
 
-# ─── Инициализация при старте ─────────────────────────────────────────────────
+    # Список для удаления
+    elif data == "delete_list":
+        rems = get_user_reminders(chat_id)
+        if not rems:
+            await edit_text(
+                query, "У тебя нет активных напоминаний",
+                InlineKeyboardMarkup([[InlineKeyboardButton("◀️ Назад", callback_data="back")]])
+            )
+            return
+
+        buttons = [
+            [InlineKeyboardButton(f"🗑 {r['hour']:02d}:{r['minute']:02d}", callback_data=f"del_{r['id']}")]
+            for r in rems
+        ]
+        buttons.append([InlineKeyboardButton("Удалить все", callback_data="delete_all")])
+        buttons.append([InlineKeyboardButton("◀️ Назад",       callback_data="back")])
+        await edit_text(query, "Выбери напоминание для удаления:", InlineKeyboardMarkup(buttons))
+
+    # Удалить одно
+    elif data.startswith("del_"):
+        rid = data[4:]
+        key = str(chat_id)
+        reminders[key] = [r for r in reminders.get(key, []) if r["id"] != rid]
+        save_reminders(reminders)
+        remove_scheduled(chat_id, rid)
+
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton("Удалить ещё",    callback_data="delete_list")],
+            [InlineKeyboardButton("◀️ В главное меню", callback_data="back")],
+        ])
+        await edit_text(query, "🗑 Напоминание удалено!\n\n" + reminder_list_text(chat_id), kb)
+
+    # Удалить все
+    elif data == "delete_all":
+        key = str(chat_id)
+        for r in reminders.get(key, []):
+            remove_scheduled(chat_id, r["id"])
+        reminders[key] = []
+        save_reminders(reminders)
+
+        kb = InlineKeyboardMarkup([[InlineKeyboardButton("◀️ В главное меню", callback_data="back")]])
+        await edit_text(query, "🗑 Все напоминания удалены!", kb)
+
+# ─── Инициализация ────────────────────────────────────────────────────────────
 async def post_init(application: Application):
     global app_ref
     app_ref = application
-
-    # Восстанавливаем все сохранённые напоминания
-    for chat_id_str, r in reminders.items():
-        schedule_reminder(int(chat_id_str), r["hour"], r["minute"])
-
+    for chat_id_str, rems in reminders.items():
+        for r in rems:
+            schedule_reminder(int(chat_id_str), r["hour"], r["minute"], r["id"])
     scheduler.start()
-    logger.info(f"Планировщик запущен. Загружено напоминаний: {len(reminders)}")
+    logger.info(f"Планировщик запущен. Пользователей: {len(reminders)}")
 
-# ─── Точка входа ──────────────────────────────────────────────────────────────
+# ─── Main ─────────────────────────────────────────────────────────────────────
 def main():
-    application = (
+    app = (
         Application.builder()
         .token(TOKEN)
         .post_init(post_init)
         .build()
     )
-
-    application.add_handler(CommandHandler("start", cmd_start))
-    application.add_handler(CallbackQueryHandler(button_handler))
-
-    logger.info("Бот запущен")
-    application.run_polling(drop_pending_updates=True)
+    app.add_handler(CommandHandler("start", cmd_start))
+    app.add_handler(CallbackQueryHandler(button_handler))
+    logger.info("Бот запущен ")
+    app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
