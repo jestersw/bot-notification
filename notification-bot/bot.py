@@ -14,8 +14,8 @@ TOKEN = os.getenv("BOT_TOKEN", "8665791853:AAGyiGxp5Sbh8AWbqlEHJX17r1wivpUVJP0")
 MOSCOW_TZ = pytz.timezone("Europe/Moscow")
 REMINDERS_FILE = "reminders.json"
 
-START_IMAGE = "start.jpg"   # картинка в приветственном сообщении
-FOOD_IMAGE  = "food.jpg"    # картинка в напоминании о еде
+START_IMAGE = "AgACAgIAAxkBAAMLabQHgugNMXqeD4qQs_1mKIj_GaEAAqIWaxtA9qFJ5Lmh9wazMK8BAAMCAAN4AAM6BA"   # картинка в приветственном сообщении
+FOOD_IMAGE  = "AgACAgIAAxkBAAMNabQHkhmA-2WFy12DvscOUmzt5BEAAqMWaxtA9qFJa6T8Xt6Pgi8BAAMCAAN4AAM6BA"    # картинка в напоминании о еде
 
 # ─── Логирование ──────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -49,11 +49,8 @@ async def send_food_reminder(chat_id: int):
             "Не забудь хорошо покушать! :3 \n\n"
             "Твой организм скажет тебе спасибо 💕"
         )
-        if os.path.exists(FOOD_IMAGE):
-            with open(FOOD_IMAGE, "rb") as photo:
-                await app_ref.bot.send_photo(chat_id=chat_id, photo=photo, caption=text)
-        else:
-            await app_ref.bot.send_message(chat_id=chat_id, text=text)
+        await app_ref.bot.send_photo(chat_id=chat_id, photo=FOOD_IMAGE, caption=text)
+        
         logger.info(f"Напоминание отправлено → chat_id={chat_id}")
     except Exception as e:
         logger.error(f"Ошибка отправки chat_id={chat_id}: {e}")
@@ -117,13 +114,9 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = main_menu_text(chat_id)
     kb   = main_menu_kb()
 
-    if os.path.exists(START_IMAGE):
-        with open(START_IMAGE, "rb") as photo:
-            await update.message.reply_photo(
-                photo=photo, caption=text, reply_markup=kb, parse_mode="Markdown"
-            )
-    else:
-        await update.message.reply_text(text, reply_markup=kb, parse_mode="Markdown")
+    await update.message.reply_photo(
+    photo=START_IMAGE, caption=text, reply_markup=kb, parse_mode="Markdown"
+)
 
 # ─── Кнопки ───────────────────────────────────────────────────────────────────
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
