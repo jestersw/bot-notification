@@ -10,7 +10,7 @@ from telegram.ext import Application, CommandHandler, CallbackQueryHandler, Cont
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 # ─── Настройки ────────────────────────────────────────────────────────────────
-TOKEN = os.getenv("BOT_TOKEN", "8665791853:AAGyiGxp5Sbh8AWbqlEHJX17r1wivpUVJP0")
+TOKEN = os.getenv("BOT_TOKEN", "...")
 MOSCOW_TZ = pytz.timezone("Europe/Moscow")
 REMINDERS_FILE = "reminders.json"
 
