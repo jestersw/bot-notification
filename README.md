@@ -6,6 +6,8 @@ Telegram-бот, который каждый день в выбранное вр
 
 Сделан just for fun для моей подруги =)
 
+![telegram-cloud-photo-size-2-5305792591217497763-x](https://github.com/user-attachments/assets/75d8efb9-5719-4403-aae9-26d743b64c2d)
+
 ---
 
 ## Запуск локально
